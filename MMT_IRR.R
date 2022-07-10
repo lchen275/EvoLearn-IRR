@@ -21,23 +21,20 @@
 library(tidyverse)
 library(irr)
 library(readxl)
-library(here)
 
 ## clear environment
 rm(list =ls())
 
-## Set working directory to location of current script 
-
-dirpath <- here()
-setwd(dirpath)
-getwd()
 ## read in datasets
 # Read in two separate BORIS aggregate files, one for each coder
-TC_irr <-read.csv("TA_MMT_preIRR_TC.csv")
-LC_irr <-read.csv("TA_MMT_preIRR_LC.csv")
+full_coder_irr <-read.csv("TA_MMT_preIRR_TC.csv")
+irr_coder_irr <-read.csv("TA_MMT_preIRR_LC.csv")
+
+full_coder <- names(which.max(table(full_coder_irr$coder_id))) #assign name of coder
+irr_coder <- names(which.max(table(irr_coder_irr$coder_id))) #assign name of coder
 
 ## Combine datasets into one file 
-site_preirr <- bind_rows(TC_irr, LC_irr) %>%
+site_preirr <- bind_rows(full_coder_irr, irr_coder_irr) %>%
   mutate(behaviour_mod = paste(Behavior, Modifiers,sep="_")) %>% # create behavior modifier pasted variable name
   rename('Duration_s' = 'Duration..s.') %>%
   rename('Start_s' = 'Start..s.') %>%
@@ -66,7 +63,7 @@ site_preirr_eaten = site_preirr %>%
 head(site_preirr_eaten)
 
 # run kappa on categorical variable `eaten`
-irr::kappa2(site_preirr_eaten %>% select(Taylor, Lydia), weight = "unweighted")
+irr::kappa2(site_preirr_eaten %>% select(all_of(full_coder), all_of(irr_coder)), weight = "unweighted")
 
 # Coding is considered reliable here if Kappa is above 80%, though it should 
 # really should be 100% because this code is extremely clear. If not 100%, please check discrepancies.
@@ -90,19 +87,19 @@ site_preirr_sums = site_preirr %>%
 # step as some of the behaviors don't have a duration (start and stop time are the same)
 
 site_preirr_sums_wide = full_join( # this join takes the previous table and 'breaks it in half' and places the j data next to the m data 
-  site_preirr_sums %>% filter(coder_id == 'Taylor'),  
-  site_preirr_sums %>% filter(coder_id == 'Lydia'), 
+  site_preirr_sums %>% filter(coder_id == all_of(full_coder)),  
+  site_preirr_sums %>% filter(coder_id == all_of(irr_coder)), 
   by = c('PID','Behavioral.category'),
-  suffix = c("_t","_l")) %>%
-  mutate(timesum_t = replace_na(timesum_t, 0), # make sure sums of '0' were counted, not marked as NA
-         timesum_l = replace_na(timesum_l, 0),
-         timediff = abs(timesum_t - timesum_l)) %>%
-  select(-coder_id_t,-coder_id_l, PID, `Behavioral.category`, timesum_t, timesum_l) %>%
+  suffix = c("_fullc","_irrc")) %>%
+  mutate(timesum_fullc = replace_na(timesum_fullc, 0), # make sure sums of '0' were counted, not marked as NA
+         timesum_irrc = replace_na(timesum_irrc, 0),
+         timediff = abs(timesum_fullc - timesum_irrc)) %>%
+  select(-coder_id_fullc,-coder_id_irrc, PID, Behavioral.category, timesum_fullc, timesum_irrc) %>%
   arrange(desc(timediff)) #see biggest differences at top
 # view(site_preirr_sums_wide) # uncomment to visually check
 
 # run the ICC on the data: 
-iccmmt = irr::icc(site_preirr_sums_wide[,c('timesum_t','timesum_l')], model='oneway', type='consistency',unit='single')
+iccmmt = irr::icc(site_preirr_sums_wide[,c('timesum_fullc','timesum_irrc')], model='oneway', type='consistency',unit='single')
 iccmmt # this gives the fulll ICC output. 
 iccmmt$value %>% round(.,2) # this gives us the summary output only for the ICC
 
@@ -142,37 +139,34 @@ site_preirr_point_wide = site_preirr_point %>%
   pivot_wider(.,id_cols = c(PID, Behavior), 
                         names_from = "coder_id", 
                         values_from = "n") %>% 
-  mutate(across(Taylor:Lydia, ~ replace_na(.x, replace = 0))) # replace NAs for unobserved cases with 0 
+  mutate(across(all_of(full_coder):all_of(irr_coder), ~ replace_na(.x, replace = 0))) # replace NAs for unobserved cases with 0 
 
 # Calculate weighted kappa (equal weight)
-irr::kappa2(site_preirr_point_wide %>% select(Taylor, Lydia), weight = 'squared', sort.levels = TRUE) # calculate kappa 
+irr::kappa2(site_preirr_point_wide %>% select(all_of(full_coder), all_of(irr_coder)), weight = 'squared', sort.levels = TRUE) # calculate kappa 
 
 # To pass - we want this kappa to be 80% or higher
 
 # also, check % agreement 
 site_preirr_point_wide %>% 
-  mutate(pointagree = (Taylor == Lydia)) %>%
+  mutate(pointagree = (get(all_of(full_coder)) == get(all_of(irr_coder)))) %>%
   summarize(propagree = mean(pointagree))
 
 # Number of agree vs disagree
 site_preirr_point_wide %>% 
-  mutate(pointagree = (Taylor == Lydia)) %>%
+  mutate(pointagree = (get(all_of(full_coder)) == get(all_of(irr_coder)))) %>%
   select(pointagree) %>% table() 
 
-site_preirr_point_wide %>% select(Taylor, Lydia) %>% table() 
+site_preirr_point_wide %>% select(all_of(full_coder), all_of(irr_coder)) %>% table() 
 
 # We also consider that a weighted Kappa is not always suggested for ordinal variables, and can lead to lower kappas for unbalanced data,
 # so we'll also include a couple of other measures here too - and the results of all of these can be evaluated
 # in conjunction to determine acceptable reliability
 
-# trying this other technique...
-irrCAC::bp.coeff.raw(site_preirr_point_wide %>% select(Taylor,Lydia))
+# Brennan-Prediger coefficient
+irrCAC::bp.coeff.raw(site_preirr_point_wide %>% select(all_of(full_coder), all_of(irr_coder)))
 
-irrCAC::gwet.ac1.raw(site_preirr_point_wide %>% select(Taylor,Lydia), 
+# Gwet's AC1/AC2 agreement coefficient
+irrCAC::gwet.ac1.raw(site_preirr_point_wide %>% select(all_of(full_coder), all_of(irr_coder)), 
                      weights = 'ordinal')
-
-
-# write.csv(pointdata, 'TA_MMT_Pre-IRR_PointBehaviours_06AUG2021.csv')
-
 
 
